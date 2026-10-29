@@ -27,6 +27,8 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/util/errors"
 	v1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+
+	"kubevirt.io/kubevirt-velero-plugin/pkg/util"
 )
 
 // NewObjectBackupGraph returns the backup object graph for the passed item
@@ -71,7 +73,8 @@ func NewVirtualMachineBackupGraph(vm *v1.VirtualMachine) ([]velero.ResourceIdent
 		resources = addVeleroResource(vm.GetName(), namespace, "virtualmachineinstances", resources)
 		// Returning full backup even if there was an error retrieving the launcher pod.
 		// The caller can decide whether to use the backup without launcher pod or handle the error.
-		resources, err = addLauncherPod(vm.GetName(), vm.GetNamespace(), resources)
+		pod, podErr := util.GetLauncherPod(vm.GetName(), vm.GetNamespace())
+		resources, err = addLauncherPod(pod, podErr, vm.GetNamespace(), resources)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -96,7 +99,8 @@ func NewVirtualMachineInstanceBackupGraph(vmi *v1.VirtualMachineInstance) ([]vel
 	var errs []error
 	// Returning full backup even if there was an error retrieving the launcher pod.
 	// The caller can decide wether to use the backup without launcher pod or handle the error.
-	resources, err := addLauncherPod(vmi.GetName(), vmi.GetNamespace(), resources)
+	pod, err := util.GetLauncherPodForVMI(vmi)
+	resources, err = addLauncherPod(pod, err, vmi.GetNamespace(), resources)
 	if err != nil {
 		errs = append(errs, err)
 	}
