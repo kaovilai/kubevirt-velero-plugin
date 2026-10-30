@@ -69,33 +69,23 @@ func GetK8sClient() (*kubernetes.Clientset, error) {
 }
 
 // GetLauncherPod returns the virt-launcher pod currently running the VMI with the given name.
-// The VMI is looked up to use its status as a hint; if it cannot be retrieved the pod is
-// selected from the pod state alone.
 func GetLauncherPod(vmiName, vmiNamespace string) (*k8score.Pod, error) {
-	vmi, err := GetVMI(vmiNamespace, vmiName)
-	if err != nil {
-		vmi = nil
-	}
-	return getLauncherPod(vmiName, vmiNamespace, vmi)
+	return getLauncherPod(vmiName, vmiNamespace)
 }
 
 // GetLauncherPodForVMI returns the virt-launcher pod currently running the passed VMI.
 func GetLauncherPodForVMI(vmi *kvv1.VirtualMachineInstance) (*k8score.Pod, error) {
-	return getLauncherPod(vmi.GetName(), vmi.GetNamespace(), vmi)
+	return getLauncherPod(vmi.GetName(), vmi.GetNamespace())
 }
 
-// getLauncherPod selects the virt-launcher pod of a VMI. After a live migration (or while one
-// is in progress) several launcher pods exist for the same VMI, and the source pod stays around
-// in the Succeeded phase once the migration completes. Hooks and ItemBlock grouping must target
-// the pod that actually runs the domain, so pods are ranked as follows:
+// getLauncherPod selects the virt-launcher pod of a VMI from the pod state only. After a live
+// migration the source pod stays around in the Succeeded phase, so pods are ranked as follows:
 //   - pods that are not finished (Succeeded/Failed) and not being deleted always win
-//   - the pod scheduled on the node the VMI status reports wins over other live pods
-//   - pods listed in the VMI active pods win over pods that are not
 //   - Running pods win over pods in other phases
 //
 // Remaining ties are broken by the oldest creation timestamp and then by name. A finished pod
 // is only returned when no live launcher pod exists.
-func getLauncherPod(vmiName, vmiNamespace string, vmi *kvv1.VirtualMachineInstance) (*k8score.Pod, error) {
+func getLauncherPod(vmiName, vmiNamespace string) (*k8score.Pod, error) {
 	pods, err := ListPods(vmiName, vmiNamespace)
 	if err != nil {
 		return nil, err
@@ -107,13 +97,7 @@ func getLauncherPod(vmiName, vmiNamespace string, vmi *kvv1.VirtualMachineInstan
 		if pod.Annotations[kvv1.DomainAnnotation] != vmiName {
 			continue
 		}
-		// Skip pods created for a previous instance of a VMI with the same name
-		if vmi != nil && vmi.UID != "" {
-			if createdBy, ok := pod.Labels[kvv1.CreatedByLabel]; ok && createdBy != string(vmi.UID) {
-				continue
-			}
-		}
-		if selected == nil || isBetterLauncherPod(pod, selected, vmi) {
+		if selected == nil || isBetterLauncherPod(pod, selected) {
 			selected = pod
 		}
 	}
@@ -133,18 +117,10 @@ func isLiveLauncherPod(pod *k8score.Pod) bool {
 	return pod.DeletionTimestamp == nil && !IsPodFinished(pod)
 }
 
-func launcherPodRank(pod *k8score.Pod, vmi *kvv1.VirtualMachineInstance) int {
+func launcherPodRank(pod *k8score.Pod) int {
 	rank := 0
 	if isLiveLauncherPod(pod) {
-		rank += 8
-	}
-	if vmi != nil {
-		if vmi.Status.NodeName != "" && pod.Spec.NodeName == vmi.Status.NodeName {
-			rank += 4
-		}
-		if _, ok := vmi.Status.ActivePods[pod.UID]; ok {
-			rank += 2
-		}
+		rank += 2
 	}
 	if pod.Status.Phase == k8score.PodRunning {
 		rank++
@@ -152,8 +128,8 @@ func launcherPodRank(pod *k8score.Pod, vmi *kvv1.VirtualMachineInstance) int {
 	return rank
 }
 
-func isBetterLauncherPod(pod, current *k8score.Pod, vmi *kvv1.VirtualMachineInstance) bool {
-	podRank, currentRank := launcherPodRank(pod, vmi), launcherPodRank(current, vmi)
+func isBetterLauncherPod(pod, current *k8score.Pod) bool {
+	podRank, currentRank := launcherPodRank(pod), launcherPodRank(current)
 	if podRank != currentRank {
 		return podRank > currentRank
 	}
