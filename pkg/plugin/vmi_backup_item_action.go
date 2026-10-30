@@ -161,7 +161,7 @@ var isVMExcludedByLabel = func(vmi *kvcore.VirtualMachineInstance) (bool, error)
 }
 
 func (p *VMIBackupItemAction) isPodExcludedByLabel(vmi *kvcore.VirtualMachineInstance) (bool, error) {
-	pod, err := util.GetLauncherPodForVMI(vmi)
+	pod, err := util.GetLauncherPod(vmi.GetName(), vmi.GetNamespace())
 	if err != nil {
 		return false, err
 	}

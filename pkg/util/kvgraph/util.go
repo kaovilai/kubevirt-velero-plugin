@@ -25,7 +25,6 @@ import (
 
 	"github.com/vmware-tanzu/velero/pkg/kuberesource"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/kubevirt-velero-plugin/pkg/util"
@@ -133,15 +132,11 @@ func addAccessCredentials(acs []v1.AccessCredential, namespace string, resources
 	return resources
 }
 
-func addLauncherPod(pod *corev1.Pod, err error, vmiNamespace string, resources []velero.ResourceIdentifier) ([]velero.ResourceIdentifier, error) {
+func addLauncherPod(vmiName, vmiNamespace string, resources []velero.ResourceIdentifier) ([]velero.ResourceIdentifier, error) {
+	pod, err := util.GetLauncherPod(vmiName, vmiNamespace)
 	if err != nil || pod == nil {
 		// Still return the list of the resources even if we couldn't get the launcher pod
 		return resources, err
-	}
-	// A finished launcher pod (e.g. the source pod of a completed live migration) no longer
-	// runs the VM: hooks cannot be executed in it and it must not be grouped with the VM volumes.
-	if util.IsPodFinished(pod) {
-		return resources, nil
 	}
 	return addVeleroResource(pod.GetName(), vmiNamespace, "pods", resources), nil
 }
