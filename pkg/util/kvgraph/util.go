@@ -138,11 +138,6 @@ func addLauncherPod(pod *corev1.Pod, err error, vmiNamespace string, resources [
 		// Still return the list of the resources even if we couldn't get the launcher pod
 		return resources, err
 	}
-	// A finished launcher pod (e.g. the source pod of a completed live migration) no longer
-	// runs the VM: hooks cannot be executed in it and it must not be grouped with the VM volumes.
-	if util.IsPodFinished(pod) {
-		return resources, nil
-	}
 	return addVeleroResource(pod.GetName(), vmiNamespace, "pods", resources), nil
 }
 

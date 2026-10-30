@@ -510,6 +510,18 @@ func TestGetLauncherPod(t *testing.T) {
 		return vmi
 	}
 
+	vmiOnNodes := func(node string, activePods map[string]string) *kvcore.VirtualMachineInstance {
+		vmi := vmiOn(node)
+		for pod, podNode := range activePods {
+			vmi.Status.ActivePods[types.UID(pod+"-uid")] = podNode
+		}
+		return vmi
+	}
+	withMigration := func(vmi *kvcore.VirtualMachineInstance, targetPod string) *kvcore.VirtualMachineInstance {
+		vmi.Status.MigrationState = &kvcore.VirtualMachineInstanceMigrationState{Completed: true, TargetPod: targetPod}
+		return vmi
+	}
+
 	testCases := []struct {
 		name     string
 		pods     []v1.Pod
@@ -542,13 +554,13 @@ func TestGetLauncherPod(t *testing.T) {
 			vmiOn("node-b", "launcher-target"),
 			"launcher-target",
 		},
-		{"Should prefer running pod over succeeded pod without VMI",
+		{"Should return the first pod without VMI, whatever its phase",
 			[]v1.Pod{
 				launcherPod("launcher-source", "test-vmi", "node-a", v1.PodSucceeded, older),
 				launcherPod("launcher-target", "test-vmi", "node-b", v1.PodRunning, newer),
 			},
 			nil,
-			"launcher-target",
+			"launcher-source",
 		},
 		{"Should prefer running pod over failed pod",
 			[]v1.Pod{
@@ -558,13 +570,13 @@ func TestGetLauncherPod(t *testing.T) {
 			vmiOn("node-b", "launcher-running"),
 			"launcher-running",
 		},
-		{"Should prefer pod not being deleted",
+		{"Should not check the pod deletion without VMI",
 			[]v1.Pod{
 				withDeletion(launcherPod("launcher-deleting", "test-vmi", "node-a", v1.PodRunning, older)),
 				launcherPod("launcher-running", "test-vmi", "node-b", v1.PodRunning, newer),
 			},
 			nil,
-			"launcher-running",
+			"launcher-deleting",
 		},
 		{"Should prefer migration source pod while migration is in progress",
 			[]v1.Pod{
@@ -590,21 +602,37 @@ func TestGetLauncherPod(t *testing.T) {
 			vmiOn("", "launcher-b"),
 			"launcher-b",
 		},
-		{"Should pick oldest live pod when nothing else differs",
+		{"Should pick the first listed pod when there is no VMI",
 			[]v1.Pod{
 				launcherPod("launcher-b", "test-vmi", "node-b", v1.PodRunning, newer),
 				launcherPod("launcher-a", "test-vmi", "node-a", v1.PodRunning, older),
 			},
 			nil,
-			"launcher-a",
+			"launcher-b",
 		},
-		{"Should pick by name when creation timestamps are equal",
+		{"Should prefer active pod on the VMI node over a finished pod listed first",
 			[]v1.Pod{
-				launcherPod("launcher-b", "test-vmi", "node-b", v1.PodRunning, older),
-				launcherPod("launcher-a", "test-vmi", "node-a", v1.PodRunning, older),
+				launcherPod("launcher-source", "test-vmi", "node-a", v1.PodSucceeded, older),
+				launcherPod("launcher-target", "test-vmi", "node-b", v1.PodRunning, newer),
 			},
-			nil,
-			"launcher-a",
+			vmiOnNodes("node-b", map[string]string{"launcher-source": "node-a", "launcher-target": "node-b"}),
+			"launcher-target",
+		},
+		{"Should pick the finished pod from a stale VMI copy",
+			[]v1.Pod{
+				launcherPod("launcher-target", "test-vmi", "node-b", v1.PodRunning, newer),
+				launcherPod("launcher-source", "test-vmi", "node-a", v1.PodSucceeded, older),
+			},
+			vmiOnNodes("node-a", map[string]string{"launcher-source": "node-a"}),
+			"launcher-source",
+		},
+		{"Should prefer the completed migration target pod",
+			[]v1.Pod{
+				launcherPod("launcher-first", "test-vmi", "node-a", v1.PodSucceeded, older),
+				launcherPod("launcher-back", "test-vmi", "node-a", v1.PodRunning, newer),
+			},
+			withMigration(vmiOnNodes("node-a", map[string]string{"launcher-first": "node-a", "launcher-back": "node-a"}), "launcher-back"),
+			"launcher-back",
 		},
 		{"Should skip pods created for a previous VMI",
 			[]v1.Pod{

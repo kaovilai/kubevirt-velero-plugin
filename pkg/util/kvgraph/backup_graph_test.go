@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	kvcore "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -660,6 +661,10 @@ func TestAddLauncherPod(t *testing.T) {
 				},
 				Status: kvcore.VirtualMachineInstanceStatus{
 					NodeName: "node-b",
+					ActivePods: map[types.UID]string{
+						"test-vmi-source-pod": "node-a",
+						"test-vmi-target-pod": "node-b",
+					},
 				},
 			},
 			[]v1.Pod{
@@ -674,7 +679,7 @@ func TestAddLauncherPod(t *testing.T) {
 				},
 			},
 		},
-		{"Should not include finished launcher pod",
+		{"Should include finished launcher pod, the phase is not checked",
 			kvcore.VirtualMachineInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "test-namespace",
@@ -684,7 +689,13 @@ func TestAddLauncherPod(t *testing.T) {
 			[]v1.Pod{
 				newLauncherPod("test-vmi-source-pod", "test-vmi", "node-a", v1.PodSucceeded),
 			},
-			[]velero.ResourceIdentifier{},
+			[]velero.ResourceIdentifier{
+				{
+					GroupResource: kuberesource.Pods,
+					Namespace:     "test-namespace",
+					Name:          "test-vmi-source-pod",
+				},
+			},
 		},
 	}
 
@@ -910,6 +921,7 @@ func newLauncherPod(name, domain, node string, phase v1.PodPhase) v1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "test-namespace",
 			Name:      name,
+			UID:       types.UID(name),
 			Labels: map[string]string{
 				"kubevirt.io": "virt-launcher",
 			},
@@ -943,31 +955,37 @@ func TestNewVirtualMachineBackupGraphAfterMigration(t *testing.T) {
 		}}, nil
 	}
 
-	expected := []velero.ResourceIdentifier{
-		{
-			GroupResource: schema.GroupResource{Group: "kubevirt.io", Resource: "virtualmachineinstances"},
-			Namespace:     "test-namespace",
-			Name:          "test-vm",
-		},
-		{
-			GroupResource: kuberesource.Pods,
-			Namespace:     "test-namespace",
-			Name:          "test-vm-target-pod",
-		},
+	expected := func(pod string) []velero.ResourceIdentifier {
+		return []velero.ResourceIdentifier{
+			{
+				GroupResource: schema.GroupResource{Group: "kubevirt.io", Resource: "virtualmachineinstances"},
+				Namespace:     "test-namespace",
+				Name:          "test-vm",
+			},
+			{
+				GroupResource: kuberesource.Pods,
+				Namespace:     "test-namespace",
+				Name:          pod,
+			},
+		}
 	}
 
-	for _, getVMIErr := range []error{nil, fmt.Errorf("VMI lookup failed")} {
+	// Without the VMI the first launcher pod is selected, whatever its phase
+	for getVMIErr, expectedPod := range map[error]string{nil: "test-vm-target-pod", fmt.Errorf("VMI lookup failed"): "test-vm-source-pod"} {
 		util.GetVMI = func(ns, name string) (*kvcore.VirtualMachineInstance, error) {
 			if getVMIErr != nil {
 				return nil, getVMIErr
 			}
 			return &kvcore.VirtualMachineInstance{
 				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-				Status:     kvcore.VirtualMachineInstanceStatus{NodeName: "node-b"},
+				Status: kvcore.VirtualMachineInstanceStatus{
+					NodeName:   "node-b",
+					ActivePods: map[types.UID]string{"test-vm-source-pod": "node-a", "test-vm-target-pod": "node-b"},
+				},
 			}, nil
 		}
 		output, err := NewVirtualMachineBackupGraph(vm)
 		assert.NoError(t, err)
-		assert.Equal(t, expected, output)
+		assert.Equal(t, expected(expectedPod), output)
 	}
 }
